@@ -1,12 +1,11 @@
 /**
  * Vercel Serverless Function: /api/send-email
  *
- * Replaces the Express server's /api/send-email route.
- * Vercel auto-deploys files under /api/ as serverless functions.
- *
- * NEW: supports an optional `attachments` array, each item shaped as
- *   { filename: string, content: string (base64), contentType?: string }
- * This is how the order-confirmation flow attaches the PDF invoice.
+ * REFACTORED: Dynamic SMTP configuration
+ * - Creates fresh Nodemailer transporter every call (no caching)
+ * - Smart port detection (465 vs 587 vs 25)
+ * - 10-second connection timeout
+ * - Immediate error responses (prevents UI hangs)
  *
  * Gmail SMTP setup:
  *   host: smtp.gmail.com
@@ -23,6 +22,44 @@ interface InboundAttachment {
   filename?: string;
   content?: string; // base64 (without data: URI prefix)
   contentType?: string;
+}
+
+/**
+ * Create a FRESH Nodemailer transporter with dynamic port/security detection.
+ * Called EVERY TIME an email needs to be sent — no caching.
+ */
+function createDynamicTransporter(smtp: any) {
+  const port = Number(smtp.port || 587);
+  
+  let transportConfig: any = {
+    host: smtp.host,
+    port,
+    auth: {
+      user: smtp.email,
+      pass: smtp.password,
+    },
+    connectionTimeout: 10000,  // 10 second timeout
+    socketTimeout: 10000,
+  };
+
+  // Smart port detection: auto-configure TLS based on port
+  if (port === 465) {
+    // Implicit SSL (SMTPS)
+    transportConfig.secure = true;
+    transportConfig.tls = { rejectUnauthorized: false };
+  } else if (port === 587 || port === 25) {
+    // Explicit STARTTLS
+    transportConfig.secure = false;
+    transportConfig.requireTLS = true;
+    transportConfig.tls = { rejectUnauthorized: false };
+  } else {
+    // Fallback for custom ports
+    transportConfig.secure = port === 465;
+    transportConfig.requireTLS = port !== 465;
+    transportConfig.tls = { rejectUnauthorized: false };
+  }
+
+  return nodemailer.createTransport(transportConfig);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -49,18 +86,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const port = Number(smtp.port || 587);
-
-    const transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port,
-      secure: port === 465,
-      auth: {
-        user: smtp.email,
-        pass: smtp.password,
-      },
-      tls: { rejectUnauthorized: false },
-    });
+    // ✅ CREATE FRESH TRANSPORTER EVERY TIME (not cached)
+    const transporter = createDynamicTransporter(smtp);
 
     // Normalize attachments: accept only well-formed entries with base64
     // content. Silently drop malformed entries instead of failing the send.
@@ -89,11 +116,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ success: true, messageId: info.messageId });
 
   } catch (err: any) {
-    console.error('[EMAIL ERROR]', err.message);
+    console.error('[EMAIL ERROR]', err.message, err.code);
+    
+    // Provide helpful debugging info based on error type
+    let hint = 'Check SMTP credentials in Admin → Settings → SMTP';
+    if (err.code === 'ECONNREFUSED') {
+      hint = 'Connection refused. Check SMTP host & port. Verify firewall/provider allows outbound SMTP.';
+    } else if (err.code === 'ETIMEDOUT' || err.message?.includes('timeout')) {
+      hint = 'Connection timeout. SMTP server not responding. Check host, port, and network connectivity.';
+    } else if (err.message?.includes('Invalid login') || err.message?.includes('authentication')) {
+      hint = 'Auth failed. Verify email & password in Admin → Settings → SMTP. For Gmail: use an App Password.';
+    }
+
     return res.status(500).json({
       success: false,
       error: err.message,
-      hint: 'For Gmail: make sure you used an App Password (not your Gmail password). Enable 2FA first, then generate App Password at myaccount.google.com/apppasswords',
+      code: err.code || 'UNKNOWN',
+      hint,
     });
   }
 }
