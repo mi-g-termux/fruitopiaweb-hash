@@ -1,0 +1,20 @@
+# Render deploy blueprint for Frutopia
+# This runs the Express server in server.mjs (handles /api/send-email,
+# /api/send-sms, /api/health and serves the built SPA from /dist).
+#
+# After clicking "New Blueprint Instance" in Render, you'll be prompted
+# to set the Firebase + SMTP + payment-gateway env vars (optional — the
+# InstallWizard can save them to Firestore at runtime instead).
+services:
+  - type: web
+    name: frutopia
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000

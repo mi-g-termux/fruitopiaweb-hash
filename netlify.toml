@@ -1,0 +1,48 @@
+# Netlify deploy config for Frutopia
+#
+# Netlify does not run a long-lived Node/Express server, and the payment
+# handlers in /api use @vercel/node signatures (which run natively on Vercel).
+# So on Netlify the recommended setup is:
+#
+#   1. Netlify serves the static SPA (dist/).
+#   2. All /api/* calls are proxied to a Node host that DOES run server.mjs
+#      (Render, Fly, Railway, or a cPanel Node app).
+#
+# To enable: set the NODE_API_URL build/env variable in Netlify
+# (Site settings -> Environment variables) to your Node server origin,
+# e.g. https://frutopiabox.onrender.com  — then redeploy.
+#
+# If you deploy the whole app on Vercel or Render/cPanel instead, you do NOT
+# need Netlify at all; those platforms serve both the SPA and /api/* directly.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Proxy API calls to the external Node server that runs server.mjs.
+# IMPORTANT: this redirect must come BEFORE the SPA fallback so /api/* is not
+# rewritten to index.html. Replace the placeholder or set NODE_API_URL.
+[[redirects]]
+  from = "/api/*"
+  to   = "https://frutopiabox.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# SPA fallback (everything that is not a real file or /api/*)
+[[redirects]]
+  from = "/*"
+  to   = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+

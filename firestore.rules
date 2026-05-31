@@ -1,0 +1,132 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn();
+    }
+
+    function isValidEmail(s) {
+      return s is string && s.size() <= 254 && s.matches('^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    }
+
+    function isValidPhoneKey(s) {
+      return s is string && s.size() >= 8 && s.size() <= 20 && s.matches('^\+?[0-9]{8,20}$');
+    }
+
+    function notYetInstalled() {
+      return !exists(/databases/$(database)/documents/settings/install_status)
+          || get(/databases/$(database)/documents/settings/install_status).data.installed != true;
+    }
+
+    function validUserCreate(userId) {
+      return request.resource.data.id == userId
+          && isValidEmail(request.resource.data.email)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 100
+          && request.resource.data.phone is string
+          && request.resource.data.phoneKey is string
+          && isValidPhoneKey(request.resource.data.phoneKey)
+          && request.resource.data.address is string
+          && request.resource.data.address.size() <= 500
+          && request.resource.data.city is string
+          && request.resource.data.city.size() <= 100
+          && request.resource.data.passwordHash is string
+          && request.resource.data.passwordHash.size() > 0
+          && request.resource.data.passwordHash.size() <= 128
+          && existsAfter(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey))
+          && getAfter(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey)).data.userId == userId
+          && !exists(/databases/$(database)/documents/userPhones/$(request.resource.data.phoneKey));
+    }
+
+    match /settings/install_status {
+      allow read:   if true;
+      allow create: if true;
+      allow update, delete: if isAdmin()
+        || (resource.data.installed == false);
+    }
+
+    match /settings/{docId} {
+      allow read:  if true;
+      allow write: if notYetInstalled() || isAdmin();
+    }
+
+    match /products/{id} {
+      allow read:  if true;
+      allow write: if notYetInstalled() || isAdmin();
+    }
+
+    match /categories/{id} {
+      allow read:  if true;
+      allow write: if notYetInstalled() || isAdmin();
+    }
+
+    match /coupons/{id} {
+      allow read:  if true;
+      allow write: if notYetInstalled() || isAdmin();
+    }
+
+    match /reviews/{id} {
+      allow read: if true;
+      allow create: if notYetInstalled()
+                    || (request.resource.data.rating is int
+                        && request.resource.data.rating >= 1
+                        && request.resource.data.rating <= 5
+                        && request.resource.data.comment is string
+                        && request.resource.data.comment.size() > 0
+                        && request.resource.data.comment.size() <= 2000
+                        && request.resource.data.customerName is string
+                        && request.resource.data.customerName.size() > 0
+                        && request.resource.data.customerName.size() <= 100);
+      allow update, delete: if isAdmin();
+    }
+
+    match /orders/{id} {
+      allow get, list: if true;
+      allow create: if request.resource.data.customerName is string
+                    && request.resource.data.customerName.size() > 0
+                    && request.resource.data.customerName.size() <= 100
+                    && request.resource.data.total is number
+                    && request.resource.data.total >= 0
+                    && request.resource.data.total <= 1000000
+                    && request.resource.data.items is list
+                    && request.resource.data.items.size() > 0
+                    && request.resource.data.items.size() <= 200
+                    && (!('email' in request.resource.data)
+                        || isValidEmail(request.resource.data.email))
+                    && (!('status' in request.resource.data)
+                        || request.resource.data.status == 'pending');
+      allow update, delete: if isAdmin();
+    }
+
+    match /newsletter/{id} {
+      allow create: if isValidEmail(request.resource.data.email)
+                    && request.resource.data.keys().hasOnly(['email','createdAt']);
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /userPhones/{phoneId} {
+      allow read: if false;
+      allow create: if request.resource.data.phoneKey == phoneId
+                    && isValidPhoneKey(phoneId)
+                    && request.resource.data.userId is string
+                    && request.resource.data.email is string
+                    && !exists(/databases/$(database)/documents/userPhones/$(phoneId));
+      allow update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow list: if true;
+      allow get: if true;
+      allow create: if validUserCreate(userId) || isAdmin();
+      allow update, delete: if isAdmin()
+        || (isSignedIn() && request.auth.uid == userId);
+    }
+
+  }
+}
